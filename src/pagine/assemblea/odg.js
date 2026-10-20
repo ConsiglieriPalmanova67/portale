@@ -18,19 +18,25 @@ const suggerimento = (testo) => {
 const scelte = (voci, scelta, vuota) => `${vuota ? `<option value="">${esc(vuota)}</option>` : ''}${voci.map(([valore, nome]) =>
   `<option value="${esc(valore)}" ${valore === scelta ? 'selected' : ''}>${esc(nome)}</option>`).join('')}`;
 
-function rigaCandidato(ctx, candidato = {}) {
+// Le parti rappresentate suggerite ai candidati; `lista` è l'id del datalist (uno nella scheda, uno nel riquadro).
+const LISTA_SCHEDA = 'parti-rappresentate';
+const LISTA_RIQUADRO = 'parti-rappresentate-nuovo';
+const listaParti = (ctx, lista) => `<datalist id="${lista}">${[INTERO, ...ctx.stato.modello.parti].map((p) => `<option value="${esc(p)}">`).join('')}</datalist>`;
+
+function rigaCandidato(ctx, candidato = {}, lista = LISTA_SCHEDA) {
   const soggetti = [...ctx.stato.modello.soggetti.values()].sort((a, b) => a.denominazione.localeCompare(b.denominazione, 'it'));
   return `
     <div class="candidato">
       <select name="cand_soggetto" aria-label="Candidato">${scelte(soggetti.map((s) => [s.id, s.denominazione]), candidato.soggetto_id, 'Scegli il candidato…')}</select>
-      <input type="text" name="cand_parte" list="parti-rappresentate" aria-label="Parte rappresentata" placeholder="Parte rappresentata" value="${esc(candidato.parte_rappresentata)}">
+      <input type="text" name="cand_parte" list="${lista}" aria-label="Parte rappresentata" placeholder="Parte rappresentata" value="${esc(candidato.parte_rappresentata)}">
       <button type="button" class="secondario" data-azione="togli-candidato">Togli</button>
     </div>`;
 }
 
-function moduloPunto(ctx, punto) {
+// `punto`: il punto da modificare; senza, è il modulo di un punto nuovo, con i `valori` già scritti se ci sono.
+function moduloPunto(ctx, punto, valori = null, lista = LISTA_SCHEDA) {
   const { modello } = ctx.stato;
-  const p = punto ?? { testo: '', tipo: 'delibera', tabella_id: modello.tabellaProprieta?.id ?? '', maggioranza: '', note: '', candidati: [] };
+  const p = punto ?? valori ?? { testo: '', tipo: 'delibera', tabella_id: modello.tabellaProprieta?.id ?? '', maggioranza: '', note: '', candidati: [] };
   return `
     <form class="modulo" data-punto="${esc(punto?.id ?? '')}">
       <label class="largo">Testo del punto <textarea name="testo" rows="2" required>${esc(p.testo)}</textarea></label>
@@ -41,7 +47,7 @@ function moduloPunto(ctx, punto) {
       <label class="largo">Note <input type="text" name="note" value="${esc(p.note)}" placeholder="Facoltative"></label>
       <fieldset class="largo candidati" ${p.tipo === 'nomina_consiglieri' ? '' : 'hidden'}>
         <legend>Candidati</legend>
-        <div class="elenco-candidati">${(p.candidati ?? []).map((c) => rigaCandidato(ctx, c)).join('')}</div>
+        <div class="elenco-candidati">${(p.candidati ?? []).map((c) => rigaCandidato(ctx, c, lista)).join('')}</div>
         <button type="button" class="secondario" data-azione="aggiungi-candidato">Aggiungi candidato</button>
       </fieldset>
       <div class="azioni">
@@ -143,6 +149,50 @@ function leggiModulo(form) {
   };
 }
 
+// Quel che è scritto nel modulo, così com'è (senza controlli): per ridisegnarlo uguale.
+const valoriScritti = (form) => ({
+  testo: form.testo.value, tipo: form.tipo.value, tabella_id: form.tabella_id.value, maggioranza: form.maggioranza.value, note: form.note.value,
+  candidati: [...form.querySelectorAll('.candidato')].map((riga) => ({
+    soggetto_id: riga.querySelector('[name="cand_soggetto"]').value, parte_rappresentata: riga.querySelector('[name="cand_parte"]').value,
+  })),
+});
+
+// Tasti dentro il modulo di un punto (candidati, regola di voto), uguali nella scheda e nel riquadro «Nuovo punto».
+// Restituisce true se il tasto era uno di questi.
+function tastoDelModulo(ctx, evento, lista) {
+  const { azione } = evento.target.dataset;
+  const form = evento.target.closest('form');
+  if (!form) return false;
+  if (azione === 'aggiungi-candidato') form.querySelector('.elenco-candidati').insertAdjacentHTML('beforeend', rigaCandidato(ctx, {}, lista));
+  else if (azione === 'togli-candidato') evento.target.closest('.candidato').remove();
+  else if (azione === 'applica-regola-modulo') {
+    const regola = regolaPerTesto(form.testo.value);
+    if (!regola) return true;
+    form.maggioranza.value = regola.maggioranza;
+    const tabella = tabellaDellaRegola(regola, contestoRegole(ctx));
+    if (tabella) form.tabella_id.value = tabella;
+  } else return false;
+  return true;
+}
+
+// Il testo del punto richiama una regola? La si mostra mentre si scrive; un punto nuovo la riceve già impostata.
+function suggerisciRegola(ctx, evento) {
+  if (evento.target.name !== 'testo') return;
+  const form = evento.target.form;
+  form.querySelector('[data-regola]').innerHTML = suggerimento(evento.target.value);
+  const regola = regolaPerTesto(evento.target.value);
+  if (regola && !form.dataset.punto && !form.maggioranza.value) {
+    form.maggioranza.value = regola.maggioranza;
+    const tabella = tabellaDellaRegola(regola, contestoRegole(ctx));
+    if (tabella) form.tabella_id.value = tabella;
+  }
+}
+
+// I candidati servono solo per i punti di nomina.
+function mostraCandidati(evento) {
+  if (evento.target.name === 'tipo') evento.target.form.querySelector('.candidati').hidden = evento.target.value !== 'nomina_consiglieri';
+}
+
 // Il database non ammette due punti con lo stesso ordine nemmeno per un istante:
 // lo scambio passa da un numero libero.
 async function scambia(ctx, a, b) {
@@ -180,28 +230,18 @@ export function schedaOdg(ctx, contenitore) {
       <p class="nota">Quando il testo di un punto riguarda uno di questi argomenti, il sistema indica maggioranza e tabella che servono e segnala se il punto non le rispetta.</p>
       <ul>${REGOLE.map((r) => `<li>${spiegaRegola(r)}</li>`).join('')}</ul>
     </details>
-    <datalist id="parti-rappresentate">${[INTERO, ...ctx.stato.modello.parti].map((p) => `<option value="${esc(p)}">`).join('')}</datalist>
+    ${listaParti(ctx, LISTA_SCHEDA)}
     ${ctx.senzaSeduta && punti.length ? `<p class="nota">Per ogni punto registra l'esito e il testo della delibera, come risultano dal verbale.
       Per aggiungere, togliere o correggere i punti riapri l'assemblea.</p>` : ''}
     ${punti.length ? `<ol class="punti">${punti.map((p, i) => (p.id === esitoAperto ? `<li class="punto in-modifica">${moduloEsito(p, i)}</li>`
       : p.id === inModifica?.id && !ctx.solaLettura ? `<li class="punto in-modifica">${moduloPunto(ctx, p)}</li>` : rigaPunto(ctx, p, i))).join('')}</ol>`
-      : `<p class="nota">Nessun punto all'ordine del giorno.${ctx.senzaSeduta ? ' Per aggiungerne riapri l\'assemblea.' : ''}</p>`}
-    ${ctx.solaLettura ? '' : `<h2>Nuovo punto</h2>${moduloPunto(ctx, null)}`}`;
+      : `<p class="nota">Nessun punto all'ordine del giorno.${ctx.senzaSeduta ? ' Per aggiungerne riapri l\'assemblea.' : ''}</p>`}`;
+  // il modulo del nuovo punto è nel riquadro a destra (riquadroNuovoPunto, disegnato da dettaglio.js)
 
   contenitore.onclick = async (evento) => {
     const { azione, punto: id } = evento.target.dataset;
     if (!azione) return;
-    const form = evento.target.closest('form');
-    if (azione === 'aggiungi-candidato') form.querySelector('.elenco-candidati').insertAdjacentHTML('beforeend', rigaCandidato(ctx));
-    if (azione === 'togli-candidato') evento.target.closest('.candidato').remove();
-    if (azione === 'applica-regola-modulo') {
-      const regola = regolaPerTesto(form.testo.value);
-      if (!regola) return;
-      form.maggioranza.value = regola.maggioranza;
-      const tabella = tabellaDellaRegola(regola, contestoRegole(ctx));
-      if (tabella) form.tabella_id.value = tabella;
-      return;
-    }
+    if (tastoDelModulo(ctx, evento, LISTA_SCHEDA)) return;
     if (azione === 'modifica' || azione === 'annulla-modifica') {
       memoria.inModifica = azione === 'modifica' ? id : null;
       schedaOdg(ctx, contenitore);
@@ -226,22 +266,8 @@ export function schedaOdg(ctx, contenitore) {
     }
   };
 
-  // i candidati servono solo per i punti di nomina
-  // il testo del punto richiama una regola? la si mostra mentre si scrive; un punto nuovo la riceve già impostata
-  contenitore.oninput = (evento) => {
-    if (evento.target.name !== 'testo') return;
-    const form = evento.target.form;
-    form.querySelector('[data-regola]').innerHTML = suggerimento(evento.target.value);
-    const regola = regolaPerTesto(evento.target.value);
-    if (regola && !form.dataset.punto && !form.maggioranza.value) {
-      form.maggioranza.value = regola.maggioranza;
-      const tabella = tabellaDellaRegola(regola, contestoRegole(ctx));
-      if (tabella) form.tabella_id.value = tabella;
-    }
-  };
-  contenitore.onchange = (evento) => {
-    if (evento.target.name === 'tipo') evento.target.form.querySelector('.candidati').hidden = evento.target.value !== 'nomina_consiglieri';
-  };
+  contenitore.oninput = (evento) => suggerisciRegola(ctx, evento);
+  contenitore.onchange = mostraCandidati;
 
   contenitore.onsubmit = (evento) => {
     evento.preventDefault();
@@ -250,22 +276,68 @@ export function schedaOdg(ctx, contenitore) {
       salvaEsito(ctx, form);
       return;
     }
-    const errore = form.querySelector('.errore');
-    let valori;
-    try {
-      valori = leggiModulo(form);
-      errore.textContent = '';
-    } catch (e) {
-      errore.textContent = e.message;
+    // nella scheda ci sono solo i moduli dei punti già inseriti: quello del punto nuovo è nel riquadro
+    const id = form.dataset.punto;
+    const valori = id ? valoriDelModulo(form) : null;
+    if (!valori) return;
+    memoria.inModifica = null;
+    ctx.esegui(() => ctx.deposito.aggiorna('punti_odg', { id }, valori));
+  };
+}
+
+// I valori del modulo di un punto; se manca qualcosa lo dice sotto il modulo e restituisce null.
+function valoriDelModulo(form) {
+  const errore = form.querySelector('.errore');
+  try {
+    const valori = leggiModulo(form);
+    errore.textContent = '';
+    return valori;
+  } catch (e) {
+    errore.textContent = e.message;
+    return null;
+  }
+}
+
+// Riquadro «Nuovo punto», a destra nelle schede della seduta (vedi dettaglio.js): lo stesso modulo, gli stessi
+// suggerimenti della regola di voto e la stessa scrittura di sempre. Quel che si scrive resta in ctx.memoria.nuovoPunto
+// finché il punto non è inserito: cambiando scheda o ridisegnando la pagina il modulo torna com'era; dopo
+// l'inserimento riuscito si svuota.
+export function riquadroNuovoPunto(ctx, contenitore) {
+  contenitore.innerHTML = `<h2>Nuovo punto</h2>${listaParti(ctx, LISTA_RIQUADRO)}${moduloPunto(ctx, null, ctx.memoria.nuovoPunto, LISTA_RIQUADRO)}`;
+  const form = contenitore.querySelector('form');
+  // scrive in memoria solo il riquadro più recente: uno già sostituito, se perde il fuoco mentre viene tolto, segnala
+  // ancora una modifica e riporterebbe in memoria un modulo vecchio (per esempio quello appena inserito)
+  const questo = {};
+  ctx.memoria.riquadroNuovoPunto = questo;
+  const ricorda = () => {
+    if (ctx.memoria.riquadroNuovoPunto === questo) ctx.memoria.nuovoPunto = valoriScritti(form);
+  };
+  contenitore.onclick = (evento) => {
+    if (evento.target.dataset.azione && tastoDelModulo(ctx, evento, LISTA_RIQUADRO)) ricorda();
+  };
+  contenitore.oninput = (evento) => {
+    suggerisciRegola(ctx, evento);
+    ricorda();
+  };
+  contenitore.onchange = (evento) => {
+    mostraCandidati(evento);
+    ricorda();
+  };
+  contenitore.onsubmit = (evento) => {
+    evento.preventDefault();
+    const valori = valoriDelModulo(form);
+    if (!valori) return;
+    // ctx.esegui fa una scrittura alla volta e, se un'altra è in corso, non fa nulla: lo si dice
+    if (ctx.occupato) {
+      form.querySelector('.errore').textContent = 'Un\'altra operazione è in corso: riprova tra qualche secondo.';
       return;
     }
-    const id = form.dataset.punto;
-    if (id) {
-      memoria.inModifica = null;
-      ctx.esegui(() => ctx.deposito.aggiorna('punti_odg', { id }, valori));
-    } else {
-      const ordine = Math.max(0, ...punti.map((p) => p.ordine)) + 1;
-      ctx.esegui(() => ctx.deposito.inserisci('punti_odg', [{ assemblea_id: ctx.assemblea.id, ordine, ...valori }]));
-    }
+    ctx.esegui(async () => {
+      // il numero d'ordine si decide sui punti del momento: un altro dispositivo potrebbe averne appena aggiunto uno
+      const attuali = await ctx.deposito.leggi('punti_odg', { assemblea_id: ctx.id });
+      const ordine = Math.max(0, ...attuali.map((p) => p.ordine)) + 1;
+      await ctx.deposito.inserisci('punti_odg', [{ assemblea_id: ctx.id, ordine, ...valori }]);
+      ctx.memoria.nuovoPunto = null;
+    });
   };
 }

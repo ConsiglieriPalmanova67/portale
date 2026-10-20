@@ -1,0 +1,45 @@
+/* Pagina dell'assemblea (src/pagine/assemblea): regole caricate dopo stili.css. */
+
+/* Riquadro «Nuovo punto» a destra nelle schede della seduta, fermo sotto la barra in alto mentre la scheda scorre.
+   --altezza-barra la tiene aggiornata app.js, --altezza-quorum dettaglio.js (la barra del quorum è fissa in fondo):
+   così il riquadro non finisce sotto nessuna delle due e, se è più alto dello spazio, scorre al suo interno.
+   Un riquadro fermo non può uscire dalla sua riga della griglia: la riga è alta almeno quanto lo schermo e lo spazio in
+   fondo alla pagina (per la barra del quorum) sta dentro la colonna della scheda, non sotto la griglia; altrimenti,
+   con una scheda corta, scorrendo fino in fondo il riquadro verrebbe spinto sotto la barra in alto. */
+.pagina:has(.asm-corpo.con-laterale) { max-width: 92rem; padding-bottom: 0; }
+.assemblea:has(.asm-corpo.con-laterale) { padding-bottom: 0; }
+.asm-corpo.con-laterale {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(17rem, 21rem); gap: 1.5rem; align-items: start;
+  min-height: calc(100vh - var(--altezza-barra, 4.5rem) - 0.75rem);
+}
+.asm-corpo.con-laterale > #asm-scheda { padding-bottom: 11rem; }
+.asm-laterale {
+  position: sticky; top: calc(var(--altezza-barra, 4.5rem) + 0.75rem);
+  max-height: calc(100vh - var(--altezza-barra, 4.5rem) - var(--altezza-quorum, 3rem) - 1.5rem);
+  overflow-y: auto; overscroll-behavior: contain;
+}
+.asm-laterale h2 { margin-top: 0; font-size: 1.05rem; }
+/* una colonna sola; le scelte con voci lunghe (maggioranze) non allargano il riquadro */
+.asm-laterale .modulo { grid-template-columns: minmax(0, 1fr); }
+.asm-laterale .modulo label { min-width: 0; }
+.asm-laterale .modulo :is(select, input[type="text"], textarea) { width: 100%; min-width: 0; }
+/* schermo stretto: il riquadro va sotto la scheda e scorre con la pagina */
+@media (max-width: 60rem) {
+  .pagina:has(.asm-corpo.con-laterale) { padding-bottom: 4rem; }
+  .assemblea:has(.asm-corpo.con-laterale) { padding-bottom: 7rem; }
+  .asm-corpo.con-laterale { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .asm-corpo.con-laterale > #asm-scheda { padding-bottom: 0; }
+  .asm-laterale { position: static; max-height: none; overflow: visible; }
+  .asm-laterale h2 { margin-top: 2rem; }
+}
+/* il riquadro di errore sopra le schede, portato in vista, non deve finire sotto la barra in alto */
+#asm-errore { scroll-margin-top: calc(var(--altezza-barra, 4.5rem) + 0.75rem); }
+
+/* Note sul punto nella scheda Votazioni: sono la sintesi della discussione nella bozza del verbale */
+.note-punto { display: grid; gap: 0.25rem; font-size: 0.9rem; margin: 0.75rem 0 0; }
+.note-stato { margin: 0.2rem 0 0; }
+
+@media print {
+  .asm-corpo.con-laterale { display: block; min-height: 0; }
+  .asm-corpo.con-laterale > #asm-scheda { padding-bottom: 0; }
+}

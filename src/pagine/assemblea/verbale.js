@@ -1,17 +1,22 @@
-// Scheda Verbale: la bozza del verbale composta dai dati della seduta (src/verbale/fatti.js e componi.js) e dai pochi
-// campi scritti a mano (presidente, segretario, convocante, allegati in più e, per ogni punto, sintesi, dichiarazioni e
-// testo della delibera). I campi si salvano da soli in `bozze_verbale` (una riga per assemblea, `testo` = JSON dei campi)
-// poco dopo l'ultima modifica e all'uscita dal campo. Mentre si scrive si aggiorna solo l'anteprima, mai il modulo:
-// fuoco e cursore restano dove sono. I campi stanno anche in ctx.memoria.verbale, così un ridisegno della pagina
-// (tempo reale, cambio di scheda) li ritrova come sono, salvati o no.
+// Scheda «Bozza del verbale»: la bozza del verbale composta dai dati della seduta (src/verbale/fatti.js e componi.js) e
+// dai pochi campi scritti a mano (presidente, segretario, convocante, allegati in più e, per ogni punto, sintesi,
+// dichiarazioni e testo della delibera). I campi si salvano da soli in `bozze_verbale` (src/verbale/bozza.js) poco dopo
+// l'ultima modifica e all'uscita dal campo, scrivendo solo i campi modificati: due schede o due dispositivi che scrivono
+// campi diversi non si cancellano a vicenda. Mentre si scrive si aggiorna solo l'anteprima, mai il modulo: fuoco e
+// cursore restano dove sono. I campi stanno anche in ctx.memoria.verbale, così un ridisegno della pagina (tempo reale,
+// cambio di scheda) li ritrova come sono, salvati o no. La stessa memoria e lo stesso salvataggio servono le note sul
+// punto della scheda Votazioni (notePunto), che sono la sintesi della discussione del verbale.
 // Si usa anche ad assemblea chiusa: il verbale si scrive alla fine.
 import { esc, ora } from '../../ui/html.js';
-import { campiVuoti, leggiCampi, puntoInformativo, fattiVerbale } from '../../verbale/fatti.js';
+import { campiVuoti, puntoInformativo, fattiVerbale } from '../../verbale/fatti.js';
 import { componiVerbale } from '../../verbale/componi.js';
+import { leggiBozza, aggiornaBozza } from '../../verbale/bozza.js';
 import { conferma } from './comuni.js';
 
 const ATTESA_SALVATAGGIO = 800;
 const ATTESA_ANTEPRIMA = 150;
+// i messaggi informativi («Testo copiato…») spariscono da soli dopo questo tempo
+const DURATA_MESSAGGIO = 8000;
 
 // L'amministratore in carica alla data dell'assemblea (o, se nessuno lo è, l'ultimo nominato), senza articolo:
 // il testo dice «convocata da [convocante]». Funzione pura.
@@ -49,10 +54,38 @@ function nomiPresenti(ctx) {
 const testoVerbale = (ctx, campi) => componiVerbale(fattiVerbale(ctx, campi));
 const adesso = () => ora(new Date().toISOString());
 
-// Salvataggio dei campi: uno alla volta; se intanto si è scritto ancora, al termine ne parte un altro.
-// Lavora solo su ctx e memoria (mai sul modulo disegnato), così vale anche dopo un ridisegno.
+// I campi da cui parte una bozza ancora mai salvata: il convocante è l'amministratore in carica.
+const campiIniziali = (ctx) => () => ({ ...campiVuoti(), convocante: convocantePredefinito(ctx.stato.dati.amministratori, ctx.assemblea.data) });
+
+// Un campo è { punto, campo }: `punto` è l'id del punto per sintesi, dichiarazioni e delibera, vuoto per gli altri.
+const chiaveDi = ({ punto, campo }) => (punto ? `${punto}/${campo}` : campo);
+const valoreDi = (campi, { punto, campo }) => String((punto ? campi.punti[punto]?.[campo] : campi[campo]) ?? '');
+function scriviValore(campi, { punto, campo }, valore) {
+  if (!punto) {
+    campi[campo] = valore;
+    return;
+  }
+  campi.punti[punto] ??= { sintesi: '', dichiarazioni: '', delibera: '' };
+  campi.punti[punto][campo] = valore;
+}
+
+// Dopo un salvataggio i campi in memoria sono quelli del deposito (con quel che hanno scritto gli altri): si riportano
+// nei campi a schermo, tranne quello in cui si sta scrivendo (si riallinea quando lo si lascia, vedi collegaCampi).
+function allinea(ctx, memoria) {
+  for (const elemento of ctx.radice.querySelectorAll('.verbale-campi [data-campo], .note-punto [data-campo]')) {
+    if (elemento === document.activeElement) continue;
+    const valore = valoreDi(memoria.campi, elemento.dataset);
+    if (elemento.value !== valore) elemento.value = valore;
+  }
+  const foglio = ctx.radice.querySelector('.verbale-testo');
+  if (foglio) foglio.innerHTML = anteprima(ctx, memoria.campi);
+}
+
+// Salvataggio dei campi: uno alla volta e solo dei campi modificati (aggiornaBozza rilegge la riga e scrive solo quelli);
+// se intanto si è scritto ancora, al termine ne parte un altro. Lavora solo su ctx e memoria (mai sul modulo disegnato),
+// così vale anche dopo un ridisegno e per qualunque scheda che mostri i campi della bozza.
 function creaSalvataggio(ctx, memoria) {
-  const s = { timer: null, inCorso: false, ancora: false, sporco: false, errore: false };
+  const s = { timer: null, inCorso: false, ancora: false, errore: false, modifiche: new Map() };
   const stato = (testo, grave = false) => {
     memoria.statoSalvataggio = { testo, grave };
     const campo = ctx.radice.querySelector('#vb-salvataggio');
@@ -61,28 +94,29 @@ function creaSalvataggio(ctx, memoria) {
       campo.classList.toggle('neg', grave);
     }
   };
-  async function scrivi(testo) {
-    if (memoria.rigaId) {
-      const aggiornate = await ctx.deposito.aggiorna('bozze_verbale', { id: memoria.rigaId }, { testo });
-      if (aggiornate.length) return;
-    }
-    // nessuna riga ancora, oppure quella letta non c'è più: se ne crea una
-    memoria.rigaId = (await ctx.deposito.inserisci('bozze_verbale', [{ assemblea_id: ctx.id, testo }]))[0].id;
-  }
   async function salva() {
     clearTimeout(s.timer);
     s.timer = null;
-    if (!s.sporco) return;
+    if (!s.modifiche.size) return;
     if (s.inCorso) { s.ancora = true; return; }
     s.inCorso = true;
-    s.sporco = false;
+    const daScrivere = [...s.modifiche.values()];
+    s.modifiche.clear();
     stato('Salvataggio…');
     try {
-      await scrivi(JSON.stringify(memoria.campi));
+      const salvati = await aggiornaBozza(ctx.deposito, ctx.id, (campi) => {
+        for (const m of daScrivere) scriviValore(campi, m, m.valore);
+      }, campiIniziali(ctx));
+      // quel che si è scritto mentre si salvava resta in attesa e resta nei campi
+      for (const m of s.modifiche.values()) scriviValore(salvati, m, m.valore);
+      const cambiati = JSON.stringify(salvati) !== JSON.stringify(memoria.campi);
+      memoria.campi = salvati;
+      if (cambiati) allinea(ctx, memoria);
       s.errore = false;
-      stato(s.sporco ? 'Modifiche da salvare…' : `Campi salvati alle ${adesso()}`);
+      stato(s.modifiche.size ? 'Modifiche da salvare…' : `Campi salvati alle ${adesso()}`);
     } catch (errore) {
-      s.sporco = true;
+      // le modifiche non scritte tornano in attesa, senza coprire quelle scritte dopo
+      for (const m of daScrivere) if (!s.modifiche.has(chiaveDi(m))) s.modifiche.set(chiaveDi(m), m);
       stato(`Campi non salvati: ${errore.message}`, true);
       // il riquadro di errore una volta sola per serie di errori, per non far saltare la pagina a ogni tasto
       if (!s.errore) ctx.mostraErrore(`La bozza del verbale non è stata salvata: ${errore.message}`, () => salva());
@@ -94,7 +128,7 @@ function creaSalvataggio(ctx, memoria) {
   }
   // chiudendo la scheda del browser con modifiche non salvate, il browser chiede conferma
   const primaDiUscire = (evento) => {
-    if (!s.sporco && !s.inCorso) return;
+    if (!s.modifiche.size && !s.inCorso) return;
     salva();
     evento.preventDefault();
     evento.returnValue = '';
@@ -105,8 +139,8 @@ function creaSalvataggio(ctx, memoria) {
   return {
     stato,
     salva,
-    programma() {
-      s.sporco = true;
+    programma(dove, valore) {
+      s.modifiche.set(chiaveDi(dove), { punto: dove.punto, campo: dove.campo, valore });
       clearTimeout(s.timer);
       s.timer = setTimeout(salva, ATTESA_SALVATAGGIO);
       if (!s.inCorso) stato('Modifiche da salvare…');
@@ -114,14 +148,77 @@ function creaSalvataggio(ctx, memoria) {
   };
 }
 
-// Prima lettura dei campi da bozze_verbale; senza riga il convocante parte dall'amministratore in carica.
-async function caricaCampi(ctx, memoria) {
-  const righe = await ctx.deposito.leggi('bozze_verbale', { assemblea_id: ctx.id });
-  // non c'è un vincolo di unicità: se le righe sono più d'una vale l'ultima modificata
-  const ultima = (r) => String(r.modificato_il ?? r.creato_il ?? '');
-  const riga = [...righe].sort((x, y) => ultima(y).localeCompare(ultima(x)))[0] ?? null;
-  memoria.rigaId = riga?.id ?? null;
-  memoria.campi = riga ? leggiCampi(riga.testo) : { ...campiVuoti(), convocante: convocantePredefinito(ctx.stato.dati.amministratori, ctx.assemblea.data) };
+// La bozza è una per pagina dell'assemblea: questa scheda e le note in Votazioni usano la stessa memoria.
+function bozzaDi(ctx) {
+  const memoria = (ctx.memoria.verbale ??= {});
+  memoria.salvataggio ??= creaSalvataggio(ctx, memoria);
+  return memoria;
+}
+
+// Prima lettura dei campi da bozze_verbale, una sola anche se la chiedono due schede.
+function caricaCampi(ctx, memoria) {
+  memoria.lettura ??= leggiBozza(ctx.deposito, ctx.id, campiIniziali(ctx))
+    .then(({ campi }) => { memoria.campi ??= campi; })
+    .finally(() => { memoria.lettura = null; });
+  return memoria.lettura;
+}
+
+// Scrive il valore di un campo a schermo nei campi in memoria e lo mette in coda per il salvataggio.
+function registra(memoria, elemento) {
+  const dove = { punto: elemento.dataset.punto, campo: elemento.dataset.campo };
+  scriviValore(memoria.campi, dove, elemento.value);
+  memoria.salvataggio.programma(dove, elemento.value);
+}
+
+// Mentre si scrive: memoria e salvataggio ritardato; uscendo da un campo modificato si salva subito. Lasciando un campo
+// lo si riallinea alla memoria, dove un salvataggio può aver portato il testo scritto intanto da un altro dispositivo.
+function collegaCampi(memoria, zona, aOgniModifica = () => {}) {
+  zona.addEventListener('input', (evento) => {
+    if (!evento.target.dataset.campo) return;
+    registra(memoria, evento.target);
+    aOgniModifica();
+  });
+  zona.addEventListener('change', (evento) => {
+    if (evento.target.dataset.campo) memoria.salvataggio.salva();
+  });
+  zona.addEventListener('focusout', (evento) => {
+    const elemento = evento.target;
+    if (!elemento.dataset?.campo || !memoria.campi) return;
+    const valore = valoreDi(memoria.campi, elemento.dataset);
+    if (elemento.value !== valore) elemento.value = valore;
+  });
+}
+
+// Note sul punto nella scheda Votazioni: sono la «sintesi della discussione» del verbale (per «Varie ed eventuali» le
+// comunicazioni), lo stesso campo della scheda Bozza del verbale. Restano modificabili a votazione e assemblea chiuse.
+export function notePunto(ctx, punto) {
+  const campi = ctx.memoria.verbale?.campi;
+  const s = ctx.memoria.verbale?.statoSalvataggio ?? { testo: 'Le note si salvano da sole mentre si scrive.', grave: false };
+  const [etichetta, aiuto] = puntoInformativo(punto)
+    ? ['Comunicazioni', '(vanno nel verbale)'] : ['Note sul punto', '(vanno nel verbale come sintesi della discussione)'];
+  return `
+    <label class="note-punto"><span>${etichetta} <span class="nota">${aiuto}</span></span>
+      <textarea id="note-punto" rows="3" data-punto="${esc(punto.id)}" data-campo="sintesi"${campi ? '' : ' disabled placeholder="Caricamento delle note…"'}>${campi ? esc(valoreDi(campi, { punto: punto.id, campo: 'sintesi' })) : ''}</textarea></label>
+    <p id="vb-salvataggio" class="nota note-stato${s.grave ? ' neg' : ''}" aria-live="polite">${esc(s.testo)}</p>`;
+}
+
+// Collega il campo disegnato da notePunto: salvataggio come nella bozza; se i campi non sono ancora letti, li legge.
+export function collegaNotePunto(ctx, contenitore) {
+  const campo = contenitore.querySelector('#note-punto');
+  if (!campo) return;
+  const memoria = bozzaDi(ctx);
+  collegaCampi(memoria, campo);
+  if (memoria.campi) return;
+  caricaCampi(ctx, memoria).then(() => {
+    if (!campo.isConnected) return;
+    campo.value = valoreDi(memoria.campi, campo.dataset);
+    campo.disabled = false;
+    campo.removeAttribute('placeholder');
+  }, (errore) => {
+    if (!campo.isConnected) return;
+    campo.placeholder = 'Note non lette';
+    ctx.mostraErrore(`Non è stato possibile leggere le note del verbale: ${errore.message}`, () => ctx.ricarica());
+  });
 }
 
 const campoTesto = (etichetta, attributi, valore, righe = 3, aiuto = '', classe = '') => `
@@ -132,7 +229,7 @@ function campiPunto(punto, numero, scritti = {}) {
   const attr = (campo) => `data-punto="${esc(punto.id)}" data-campo="${campo}"`;
   const corpo = puntoInformativo(punto)
     ? campoTesto('Comunicazioni', attr('sintesi'), scritti.sintesi, 3, '(punto senza votazione: solo comunicazioni)')
-    : campoTesto('Sintesi della discussione', attr('sintesi'), scritti.sintesi)
+    : campoTesto('Sintesi della discussione', attr('sintesi'), scritti.sintesi, 3, '(sono anche le note sul punto della scheda Votazioni)')
       + campoTesto('Dichiarazioni a verbale', attr('dichiarazioni'), scritti.dichiarazioni, 2, '(chi le ha chieste e che cosa ha dichiarato)')
       + campoTesto('Testo della delibera posta in votazione', attr('delibera'), scritti.delibera, 3);
   return `<fieldset class="largo vb-punto"><legend>Punto ${numero}. ${esc(punto.testo)}</legend>${corpo}</fieldset>`;
@@ -162,17 +259,6 @@ function anteprima(ctx, campi) {
   }
 }
 
-// Scrive il valore di un campo del modulo nei campi in memoria.
-function registra(campi, elemento) {
-  const { punto, campo } = elemento.dataset;
-  if (!punto) {
-    campi[campo] = elemento.value;
-    return;
-  }
-  campi.punti[punto] ??= { sintesi: '', dichiarazioni: '', delibera: '' };
-  campi.punti[punto][campo] = elemento.value;
-}
-
 async function copia(ctx, memoria, contenitore) {
   const testo = testoVerbale(ctx, memoria.campi);
   try {
@@ -191,12 +277,21 @@ async function copia(ctx, memoria, contenitore) {
   }
 }
 
+// Riga del messaggio sotto i tasti: si toglie alla prossima azione; quelli informativi anche da soli dopo qualche secondo.
+// Senza testo la riga si svuota.
 function messaggio(ctx, memoria, testo, grave = false, html = '') {
-  memoria.messaggio = { testo, grave, html };
+  clearTimeout(memoria.timerMessaggio);
+  memoria.messaggio = testo ? { testo, grave, html } : null;
   const riga = ctx.radice.querySelector('#vb-messaggio');
-  if (riga) riga.outerHTML = rigaMessaggio(memoria.messaggio);
+  if (riga) {
+    riga.className = classeMessaggio(memoria.messaggio);
+    riga.innerHTML = testoMessaggio(memoria.messaggio);
+  }
+  if (testo && !grave) memoria.timerMessaggio = setTimeout(() => messaggio(ctx, memoria, ''), DURATA_MESSAGGIO);
 }
-const rigaMessaggio = (m) => `<p id="vb-messaggio" class="nota no-stampa${m?.grave ? ' neg' : ''}" aria-live="polite">${m ? `${esc(m.testo)}${m.html ?? ''}` : ''}</p>`;
+const classeMessaggio = (m) => `nota no-stampa${m?.grave ? ' neg' : ''}`;
+const testoMessaggio = (m) => (m ? `${esc(m.testo)}${m.html ?? ''}` : '');
+const rigaMessaggio = (m) => `<p id="vb-messaggio" class="${classeMessaggio(m)}" aria-live="polite">${testoMessaggio(m)}</p>`;
 
 // «Salva nei Verbali come bozza»: inserisce o aggiorna il verbale in bozza dell'assemblea; un definitivo non si tocca.
 async function salvaNeiVerbali(ctx, memoria) {
@@ -217,6 +312,11 @@ async function salvaNeiVerbali(ctx, memoria) {
   const bozza = righe.find((v) => v.stato === 'bozza');
   if (bozza?.testo?.trim() && bozza.testo !== testo
     && !(await conferma('Nei Verbali c\'è già un testo in bozza per questa assemblea. Sostituirlo con il testo di questa bozza?', 'Sostituisci'))) return;
+  // ctx.esegui fa una scrittura alla volta e, se un'altra è in corso, non fa nulla: lo si dice
+  if (ctx.occupato) {
+    messaggio(ctx, memoria, 'Un\'altra operazione è in corso: il testo non è stato salvato nei Verbali. Riprova tra qualche secondo.', true);
+    return;
+  }
   ctx.esegui(async () => {
     // si rilegge al momento della scrittura: riprovando dopo un errore non si crea un secondo verbale
     const attuali = await ctx.deposito.leggi('verbali', { assemblea_id: ctx.id });
@@ -224,7 +324,7 @@ async function salvaNeiVerbali(ctx, memoria) {
     const esistente = attuali.find((v) => v.stato === 'bozza');
     if (esistente) await ctx.deposito.aggiorna('verbali', { id: esistente.id }, { testo });
     else await ctx.deposito.inserisci('verbali', [{ assemblea_id: ctx.id, testo, stato: 'bozza' }]);
-    memoria.messaggio = { testo: `Salvato nei Verbali come bozza alle ${adesso()}.`, grave: false, html: vai };
+    messaggio(ctx, memoria, `Salvato nei Verbali come bozza alle ${adesso()}.`, false, vai);
   });
 }
 
@@ -255,20 +355,17 @@ function disegnaScheda(ctx, memoria, contenitore) {
   const form = contenitore.querySelector('.verbale-campi');
   // Invio in un campo non deve ricaricare la pagina
   form.addEventListener('submit', (evento) => evento.preventDefault());
-  form.addEventListener('input', (evento) => {
-    if (!evento.target.dataset.campo) return;
-    registra(memoria.campi, evento.target);
+  collegaCampi(memoria, form, () => {
     aggiornaAnteprima();
-    memoria.salvataggio.programma();
-  });
-  // uscendo da un campo modificato si salva subito
-  form.addEventListener('change', (evento) => {
-    if (evento.target.dataset.campo) memoria.salvataggio.salva();
+    // scrivendo, il messaggio dell'azione di prima non vale più
+    if (memoria.messaggio) messaggio(ctx, memoria, '');
   });
   // un testo che non si compone (dati inattesi) diventa un messaggio con «Riprova», non un errore nascosto
   const prova = (fai) => fai().catch((errore) => ctx.mostraErrore(`Operazione non riuscita: ${errore.message}`, () => prova(fai)));
   contenitore.querySelector('.azioni').addEventListener('click', (evento) => {
     const azione = evento.target.closest('button')?.dataset.azione;
+    if (!azione) return;
+    messaggio(ctx, memoria, '');
     if (azione === 'stampa') window.print();
     if (azione === 'copia') prova(() => copia(ctx, memoria, memoria.contenitore));
     if (azione === 'verbali') prova(() => salvaNeiVerbali(ctx, memoria));
@@ -280,8 +377,7 @@ export function schedaVerbale(ctx, contenitore) {
     contenitore.innerHTML = '<p class="avviso no-stampa">La bozza del verbale si compone dopo l\'apertura della seduta, con le presenze, le deleghe e i voti registrati.</p>';
     return;
   }
-  const memoria = ctx.memoria.verbale;
-  memoria.salvataggio ??= creaSalvataggio(ctx, memoria);
+  const memoria = bozzaDi(ctx);
   // il contenitore più recente: la prima lettura, finita, disegna lì (quello di prima può essere già sparito)
   memoria.contenitore = contenitore;
   if (memoria.campi) {
@@ -289,8 +385,7 @@ export function schedaVerbale(ctx, contenitore) {
     return;
   }
   contenitore.innerHTML = '<p class="nota">Caricamento della bozza del verbale…</p>';
-  memoria.lettura ??= caricaCampi(ctx, memoria).finally(() => { memoria.lettura = null; });
-  memoria.lettura.then(() => {
+  caricaCampi(ctx, memoria).then(() => {
     if (memoria.contenitore === contenitore && contenitore.isConnected) disegnaScheda(ctx, memoria, contenitore);
   }, (errore) => {
     if (memoria.contenitore !== contenitore || !contenitore.isConnected) return;

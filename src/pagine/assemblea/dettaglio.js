@@ -24,20 +24,23 @@ import { daInteri } from '../../calcolo/numeri.js';
 import { esc, millesimi } from '../../ui/html.js';
 import { senzaSeduta, etichettaEsito } from './comuni.js';
 import { testata, collegaTestata } from './testata.js';
-import { schedaOdg } from './odg.js';
+import { schedaOdg, riquadroNuovoPunto } from './odg.js';
 import { schedaPresenze } from './presenze.js';
 import { schedaDeleghe } from './deleghe.js';
 import { schedaVotazioni } from './votazioni.js';
 import { schedaReport } from './report.js';
 import { schedaVerbale } from './verbale.js';
 
+// `nuovoPunto`: la scheda ha a destra il riquadro «Nuovo punto», fermo mentre la pagina scorre (non nelle schede da
+// stampare, Report e Bozza del verbale, che restano a tutta larghezza; mai ad assemblea chiusa).
 const SCHEDE = [
-  { id: 'odg', titolo: 'Ordine del giorno', disegna: schedaOdg },
-  { id: 'presenze', titolo: 'Presenze', disegna: schedaPresenze },
-  { id: 'deleghe', titolo: 'Deleghe', disegna: schedaDeleghe },
-  { id: 'votazioni', titolo: 'Votazioni', disegna: schedaVotazioni },
+  { id: 'odg', titolo: 'Ordine del giorno', disegna: schedaOdg, nuovoPunto: true },
+  { id: 'presenze', titolo: 'Presenze', disegna: schedaPresenze, nuovoPunto: true },
+  { id: 'deleghe', titolo: 'Deleghe', disegna: schedaDeleghe, nuovoPunto: true },
+  { id: 'votazioni', titolo: 'Votazioni', disegna: schedaVotazioni, nuovoPunto: true },
   { id: 'report', titolo: 'Report', disegna: schedaReport },
-  { id: 'verbale', titolo: 'Verbale', disegna: schedaVerbale },
+  // la testata ha già un collegamento «Verbale» (alla pagina Verbali): la scheda ha un nome diverso
+  { id: 'verbale', titolo: 'Bozza del verbale', disegna: schedaVerbale },
 ];
 
 // Che cosa mostrano le schede della seduta dal vivo per un'assemblea registrata come già svolta.
@@ -136,7 +139,24 @@ function disegna(ctx) {
     campo?.focus({ preventScroll: true });
     try { campo?.setSelectionRange(ricerca.cursore, ricerca.cursore); } catch { /* il cursore torna in fondo */ }
   }
+  disegnaRiquadro(ctx, scheda);
   radice.querySelector('#asm-quorum').innerHTML = barraQuorum(ctx);
+}
+
+// Il riquadro «Nuovo punto» a destra della scheda: ridisegnato a ogni disegno (quel che vi si scrive resta in ctx.memoria).
+function disegnaRiquadro(ctx, scheda) {
+  const laterale = ctx.radice.querySelector('#asm-laterale');
+  const con = Boolean(scheda.nuovoPunto) && !ctx.solaLettura;
+  ctx.radice.querySelector('.asm-corpo').classList.toggle('con-laterale', con);
+  laterale.hidden = !con;
+  if (!con) {
+    laterale.replaceChildren();
+    return;
+  }
+  // prima si disegna il riquadro nuovo, poi si toglie il vecchio (vedi riquadroNuovoPunto)
+  const riquadro = document.createElement('div');
+  riquadroNuovoPunto(ctx, riquadro);
+  laterale.replaceChildren(riquadro);
 }
 
 function mostraErrore(ctx, testo, riprova) {
@@ -201,6 +221,16 @@ function ascoltaModifiche(ctx) {
   ctx.allaChiusura.push(smetti, () => clearTimeout(attesa));
 }
 
+// La barra del quorum è fissa in fondo e va a capo sugli schermi più stretti: la sua altezza (--altezza-quorum) serve al
+// riquadro fisso a destra per non finirci sotto.
+function misuraQuorum(ctx) {
+  const quorum = ctx.radice.querySelector('#asm-quorum');
+  if (typeof ResizeObserver !== 'function') return;
+  const osserva = new ResizeObserver(() => ctx.radice.style.setProperty('--altezza-quorum', `${quorum.offsetHeight}px`));
+  osserva.observe(quorum);
+  ctx.allaChiusura.push(() => osserva.disconnect());
+}
+
 function creaContesto(stato, contenitore, id) {
   contenitore.innerHTML = `
     <div class="assemblea">
@@ -208,7 +238,10 @@ function creaContesto(stato, contenitore, id) {
       <header class="testata" id="asm-testata"><p class="nota">Caricamento…</p></header>
       <div id="asm-errore" class="avviso grave" role="alert" hidden></div>
       <nav class="schede" id="asm-schede" aria-label="Schede dell'assemblea"></nav>
-      <section id="asm-scheda"></section>
+      <div class="asm-corpo">
+        <section id="asm-scheda"></section>
+        <aside id="asm-laterale" class="asm-laterale no-stampa" aria-label="Nuovo punto all'ordine del giorno" hidden></aside>
+      </div>
       <footer class="quorum" id="asm-quorum" aria-live="polite"></footer>
     </div>`;
   const unitaPerId = new Map(stato.dati.unita.map((u) => [u.id, u]));
@@ -256,6 +289,7 @@ function creaContesto(stato, contenitore, id) {
   };
   collegaTestata(ctx, () => disegna(ctx));
   ascoltaModifiche(ctx);
+  misuraQuorum(ctx);
   return ctx;
 }
 

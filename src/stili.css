@@ -377,7 +377,9 @@ tr.totale td { background: var(--riga); }
 /* Documenti: il modulo di caricamento resta fermo a sinistra mentre l'archivio scorre */
 .pagina:has(.doc-layout) { max-width: 92rem; }
 .doc-layout { display: grid; grid-template-columns: minmax(17rem, 21rem) minmax(0, 1fr); gap: 1.5rem; align-items: start; }
-.doc-laterale { position: sticky; top: 4.5rem; max-height: calc(100vh - 5.5rem); overflow-y: auto; }
+/* sotto la barra in alto (--altezza-barra, da app.js); l'altezza lascia fuori anche i 4rem in fondo alla pagina,
+   così in fondo alla pagina il riquadro non viene spinto sotto la barra */
+.doc-laterale { position: sticky; top: calc(var(--altezza-barra, 4.5rem) + 0.75rem); max-height: calc(100vh - var(--altezza-barra, 4.5rem) - 4.75rem); overflow-y: auto; }
 .doc-laterale h2 { margin-top: 0; font-size: 1.05rem; }
 .doc-laterale .modulo { grid-template-columns: 1fr; }
 .doc-anno { margin-bottom: 1.75rem; }

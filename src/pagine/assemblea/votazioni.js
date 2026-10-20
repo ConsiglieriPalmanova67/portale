@@ -6,6 +6,7 @@ import { daInteri } from '../../calcolo/numeri.js';
 import { esc, millesimi, ora, normalizza } from '../../ui/html.js';
 import { TIPI_PUNTO, VOTI, nonAperta, conferma, scegli, soloPresenti, ricordaVista, statoDelPunto, orariAssente, spiegaRegola } from './comuni.js';
 import { riquadroNomina, registraMandati } from './nomine.js';
+import { notePunto, collegaNotePunto } from './verbale.js';
 
 const peso = (interi) => millesimi(daInteri(interi));
 const teste = (n) => `${n} ${n === 1 ? 'testa' : 'teste'}`;
@@ -93,7 +94,8 @@ function pannello(ctx, punto, stato) {
     </p>
     ${(() => { const { regola, problemi } = controllaPunto(punto, { tabellaProprietaId: modello.tabellaProprieta?.id }); return regola ? `<p class="regola-voto ${problemi.length ? 'avviso' : ''}">${spiegaRegola(regola)}${problemi.length ? `<br><strong>Attenzione:</strong> il punto non rispetta la regola (${esc(problemi.join('; '))}). <a href="#/assemblee/${encodeURIComponent(ctx.id)}/odg">Correggi nell'ordine del giorno</a>` : ''}</p>` : ''; })()}
     ${punto.tipo === 'nomina_consiglieri' ? `<p class="nota">Candidati: ${(punto.candidati ?? []).map((c) =>
-      `${esc(modello.soggetti.get(c.soggetto_id)?.denominazione ?? '?')}${c.parte_rappresentata ? ` (${esc(c.parte_rappresentata)})` : ''}`).join(', ') || 'nessuno indicato'}.</p>` : ''}`;
+      `${esc(modello.soggetti.get(c.soggetto_id)?.denominazione ?? '?')}${c.parte_rappresentata ? ` (${esc(c.parte_rappresentata)})` : ''}`).join(', ') || 'nessuno indicato'}.</p>` : ''}
+    ${notePunto(ctx, punto)}`;
 
   if (!stato.esito || !nomeTabella) {
     return `${testa}
@@ -156,6 +158,8 @@ export function schedaVotazioni(ctx, contenitore) {
   const chiuso = Boolean(punto.votato_il);
 
   contenitore.innerHTML = `${elencoPunti(ctx, punto)}<section class="punto-voto">${pannello(ctx, punto, stato)}</section>`;
+  // le note sul punto si salvano da sole nella bozza del verbale, senza ridisegnare la scheda
+  collegaNotePunto(ctx, contenitore);
 
   const elenco = contenitore.querySelector('#elenco-voti');
   const righeSeduta = new Map(ctx.seduta.righe.map((r) => [r.testa.id, r]));

@@ -75,6 +75,13 @@ function disegnaMenu(pagina, parametro) {
   }
 }
 
+// La barra in alto resta ferma mentre la pagina scorre e la sua altezza cambia (seconda riga del menu, fascia della
+// prova, schermo stretto): i riquadri fissi (position: sticky) la leggono da --altezza-barra per non finirci sotto.
+if (typeof ResizeObserver === 'function') {
+  const barra = $('header.barra');
+  new ResizeObserver(() => document.documentElement.style.setProperty('--altezza-barra', `${barra.offsetHeight}px`)).observe(barra);
+}
+
 function mostra(vista) {
   for (const id of ['vista-accesso', 'vista-attesa', 'vista-app']) $(`#${id}`).hidden = id !== vista;
 }
