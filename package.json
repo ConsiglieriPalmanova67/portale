@@ -1,0 +1,8 @@
+{
+  "name": "condominio-palmanova-67",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

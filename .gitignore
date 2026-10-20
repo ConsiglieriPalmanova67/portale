@@ -1,0 +1,13 @@
+# dati reali: mai nel repository
+/dati/
+/import/
+*.csv
+*.xlsx
+*.pdf
+.env*
+node_modules/
+
+# copie di lavoro separate (git worktree)
+.worktrees/
+# area di lavoro degli agenti (piani in corso)
+.superpowers/

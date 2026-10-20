@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Condominio Palmanova 67 — Consiglio</title>
+  <link rel="stylesheet" href="src/stili.css">
+</head>
+<body>
+  <main id="vista-accesso" class="accesso" hidden>
+    <form id="modulo-accesso">
+      <h1>Condominio Palmanova 67</h1>
+      <p class="nota">Area riservata al consiglio di condominio.</p>
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Entra</button>
+      <button type="button" class="collegamento" id="password-dimenticata">Password dimenticata?</button>
+      <p id="accesso-errore" class="errore" role="alert"></p>
+      <p id="accesso-messaggio" class="nota" role="status"></p>
+    </form>
+    <form id="modulo-nuova-password" hidden>
+      <h1>Nuova password</h1>
+      <p class="nota">Scegli la nuova password per entrare nel portale (almeno 8 caratteri).</p>
+      <label for="nuova-password">Nuova password</label>
+      <input id="nuova-password" type="password" autocomplete="new-password" minlength="8" required>
+      <label for="ripeti-password">Ripeti la password</label>
+      <input id="ripeti-password" type="password" autocomplete="new-password" minlength="8" required>
+      <button type="submit">Salva ed entra</button>
+      <p id="nuova-password-errore" class="errore" role="alert"></p>
+    </form>
+  </main>
+
+  <main id="vista-attesa" class="accesso">
+    <p id="attesa-testo">Avvio…</p>
+  </main>
+
+  <div id="vista-app" hidden>
+    <header class="barra">
+      <p id="fascia-prova" class="fascia-prova" role="status" hidden>MODALITÀ PROVA — dati finti, nulla viene salvato</p>
+      <strong>Palmanova 67</strong>
+      <!-- voci del menu e sottosezioni: le scrive app.js (MENU) -->
+      <nav aria-label="Sezioni" id="menu"></nav>
+      <span class="utente"><span id="utente"></span> <button type="button" id="esci" class="secondario">Esci</button></span>
+      <nav aria-label="Sottosezioni" id="sottomenu" class="sottomenu" hidden></nav>
+    </header>
+    <main id="contenuto" class="pagina"></main>
+  </div>
+
+  <script type="module" src="src/pagine/app.js"></script>
+</body>
+</html>
